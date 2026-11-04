@@ -1,0 +1,3 @@
+.env
+.DS_Store
+# config.js contem somente URL e chave publica para GitHub Pages

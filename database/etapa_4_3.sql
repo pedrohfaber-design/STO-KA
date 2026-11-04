@@ -1,0 +1,2 @@
+-- Funções stoka_editar_produto, stoka_excluir_produto e atualização de stoka_ajustar_estoque devem estar instaladas no Supabase conforme Etapa 4.3.
+-- Tabela produtos precisa das colunas ativo boolean e excluido_em timestamptz.
