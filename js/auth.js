@@ -6,19 +6,64 @@
   const next = (page) => window.location.replace(page);
   const checkConfig = () => { if (!client()) { notify('error','Configuração pendente', window.stokaConfigError || 'Supabase não configurado'); return false; } return true; };
 
-  async function membership(user) {
-    const { data, error } = await client().from('membros_empresa').select('empresa_id,papel').eq('usuario_id',user.id).limit(1);
+  // Cada usuario pode participar de varias empresas, com papeis independentes.
+  async function memberships(user) {
+    const { data, error } = await client().from('membros_empresa')
+      .select('empresa_id,papel,permissoes').eq('usuario_id', user.id);
     if (error) throw error;
-    return data?.[0] || null;
+    return data || [];
+  }
+  const storageKey = user => `stoka:empresa:${user.id}`;
+  function membershipFor(user, members) {
+    const saved = sessionStorage.getItem(storageKey(user));
+    return members.find(m => m.empresa_id === saved) || members[0] || null;
+  }
+  async function renderCompanySelector(user, members, active) {
+    if (members.length < 2) return;
+    const ids = members.map(m => m.empresa_id);
+    const { data, error } = await client().from('empresas').select('id,nome').in('id', ids);
+    if (error) throw error;
+    const names = new Map((data || []).map(c => [c.id, c.nome]));
+    const section = document.createElement('div');
+    section.className = 'stoka-company-switcher';
+    const label = document.createElement('label');
+    label.htmlFor = 'stoka-empresa-selecionada';
+    label.textContent = 'Empresa ativa';
+    const select = document.createElement('select');
+    select.id = 'stoka-empresa-selecionada';
+    select.className = 'field';
+    select.setAttribute('aria-label', 'Trocar empresa ativa');
+    members.forEach(member => {
+      const option = document.createElement('option');
+      option.value = member.empresa_id;
+      option.textContent = `${names.get(member.empresa_id) || 'Empresa'} — ${member.papel === 'administrador' ? 'Gestor' : 'Analista'}`;
+      select.appendChild(option);
+    });
+    select.value = active.empresa_id;
+    select.addEventListener('change', () => {
+      if (!members.some(m => m.empresa_id === select.value)) return;
+      sessionStorage.setItem(storageKey(user), select.value);
+      // Recarregar garante que todas as consultas e permissoes usem a nova empresa.
+      window.location.assign('index.html');
+    });
+    section.append(label, select);
+    const header = document.querySelector('header');
+    if (header) header.insertAdjacentElement('afterend', section);
+    else document.body.prepend(section);
   }
   async function protectPage() {
     if (!checkConfig()) return;
     const { data: { user }, error } = await client().auth.getUser();
     if (error || !user) { next('login.html'); return; }
     try {
-      const member = await membership(user);
+      const members = await memberships(user);
+      const member = membershipFor(user, members);
       if (!member) { next('empresa.html'); return; }
+      await renderCompanySelector(user, members, member);
+      window.stokaCan = key => member.papel === 'administrador' || member.permissoes?.[key] === true;
       document.body.hidden = false;
+      document.querySelectorAll('[data-admin-only]').forEach(el => { if (member.papel !== 'administrador') el.hidden = true; });
+      document.querySelectorAll('[data-permission]').forEach(el => { if (!window.stokaCan(el.dataset.permission)) el.hidden = true; });
       document.querySelectorAll('[data-user-email]').forEach(el => { el.textContent = user.email || ''; });
       document.querySelectorAll('[data-user-role]').forEach(el => { el.textContent = member.papel; });
       document.querySelectorAll('[data-logout]').forEach(el => el.addEventListener('click', logout));
@@ -29,6 +74,8 @@
     if (!checkConfig()) return;
     const { error } = await client().auth.signOut();
     if (error) return notify('error','Erro ao sair',error.message);
+    // Limpa a empresa ativa somente ao sair da conta.
+    Object.keys(sessionStorage).filter(k => k.startsWith('stoka:empresa:')).forEach(k => sessionStorage.removeItem(k));
     next('login.html');
   }
   async function initLogin() {
@@ -75,7 +122,7 @@
     if (!checkConfig()) return;
     const { data: { user }, error } = await client().auth.getUser();
     if (error || !user) return next('login.html');
-    try { if (await membership(user)) return next('index.html'); }
+    try { if ((await memberships(user)).length) return next('index.html'); }
     catch (err) { return notify('error','Erro ao verificar empresa',err.message); }
     const form = document.querySelector('#empresa-form');
     const suggestedName = user.user_metadata?.nome || '';
